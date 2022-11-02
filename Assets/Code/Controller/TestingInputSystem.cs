@@ -1,3 +1,5 @@
+using System;
+using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using static UnityEngine.InputSystem.InputAction;
@@ -5,88 +7,83 @@ using static UnityEngine.InputSystem.InputAction;
 
 namespace WORLDGAMEDEVELOPMENT
 {
-    public sealed class TestingInputSystem : MonoBehaviour
+    public sealed class TestingInputSystem : NetworkBehaviour
     {
         [SerializeField] private float _forceJump;
         [SerializeField] private float _speed;
+        [SerializeField] private float _maxVelocity;
+        [SerializeField] private float _rotationSpeed;
 
         private PlayerControls _playerInputActionsControls;
         private Rigidbody _rigidBody;
         private PlayerInput _playerInput;
+        private Vector2 _inputVector = Vector2.zero;
+        private Camera _camera;
+
+        public override void OnNetworkSpawn()
+        {
+            if (!IsOwner)
+            {
+                Destroy(this);
+            }
+        }
 
         private void Awake()
         {
+            _camera = Camera.main;
             _playerInput = GetComponent<PlayerInput>();
             _rigidBody = GetComponent<Rigidbody>();
             _playerInputActionsControls = new PlayerControls();
             _playerInputActionsControls.Player.Jump.performed += Jump;
+            _playerInputActionsControls.Player.Movement.performed += Movement_performed;
+            _playerInputActionsControls.Player.Movement.canceled += Movement_canceled;
             _playerInputActionsControls.Enable();
+        }
 
-            #region RebindKeyInputAction
+        private void Movement_canceled(CallbackContext obj)
+        {
+            _inputVector = Vector2.zero;
+        }
 
-            //RebindKeyInputAction
-            //_playerInputActionsControls.Player.Disable();
-            //_playerInputActionsControls.Player.Jump.PerformInteractiveRebinding().OnComplete(callback =>
-            //{
-            //    Debug.Log(callback.action.bindings[0]);
-            //    callback.Dispose();
-            //    _playerInputActionsControls.Player.Enable();
-            //}).Start();
-
-            #endregion
-
-            #region Save and Load player Input Action
-
-            ////Save _playerInput.actions to JSON
-            //var rebinds = _playerInput.actions.SaveBindingOverridesAsJson();
-            //PlayerPrefs.SetString("rebinds", rebinds);
-
-            ////Load _playerInput.actions in PlayerPrefs
-            //var reRebinds = PlayerPrefs.GetString("rebinds");
-            //_playerInput.actions.LoadBindingOverridesFromJson(rebinds); 
-
-            #endregion
+        private void Movement_performed(CallbackContext context)
+        {
+            _inputVector = context.ReadValue<Vector2>();
         }
 
         private void OnDisable()
         {
             _playerInputActionsControls.Player.Jump.performed -= Jump;
+            _playerInputActionsControls.Player.Movement.performed -= Movement_performed;
+            _playerInputActionsControls.Player.Movement.canceled -= Movement_canceled;
         }
 
         private void FixedUpdate()
         {
-            var inputVector = _playerInputActionsControls.Player.Movement.ReadValue<Vector2>();
-            _rigidBody.AddForce(new Vector3(inputVector.x, 0.0f, inputVector.y) * _speed, ForceMode.Force);
+            HandleMovement();
+            HandleRotation();
         }
 
-        private void Update()
+        private void HandleRotation()
         {
-            if (Keyboard.current.tKey.wasPressedThisFrame)
-            {
-                _playerInput.SwitchCurrentActionMap("UI");
-                _playerInputActionsControls.Player.Disable();
-                _playerInputActionsControls.UI.Enable();
-            }
-            if (Keyboard.current.yKey.wasPressedThisFrame)
-            {
-                _playerInput.SwitchCurrentActionMap("Player");
-                _playerInputActionsControls.UI.Disable();
-                _playerInputActionsControls.Player.Enable();
-            }
+            var dir = _camera.transform.forward;
+            var rot = Quaternion.LookRotation(dir);
+            transform.localRotation = Quaternion.RotateTowards(transform.rotation, rot, _rotationSpeed);
+            //TODO - переделать вращение игрока относительно камеры
         }
 
-        public void Submit(CallbackContext context)
+        /// <summary>
+        /// Movement Input System 
+        /// </summary>
+        private void HandleMovement()
         {
-            Debug.Log($"Submit + {context}");
+            var input = new Vector3(_inputVector.x, 0.0f, _inputVector.y);
+            _rigidBody.velocity += input.normalized * _speed * Time.fixedDeltaTime;
+            _rigidBody.velocity = Vector3.ClampMagnitude(_rigidBody.velocity, _maxVelocity);
         }
 
-        public void Jump(CallbackContext callbackContext)
+        public void Jump(CallbackContext context)
         {
-            if (callbackContext.performed)
-            {
-                Debug.Log($"Jump + {callbackContext.phase}");
-                _rigidBody.AddForce(Vector3.up * _forceJump, ForceMode.Impulse);
-            }
+            _rigidBody.AddForce(Vector3.up * _forceJump, ForceMode.Impulse);
         }
     }
 }
